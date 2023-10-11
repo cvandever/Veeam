@@ -1,0 +1,373 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="utf-8">
+    <title>Space Invaders</title>
+    <style>
+      body {background-color: #333;color: #fff;font-family: Arial, sans-serif;margin: 0;padding: 0;}
+      canvas { display: block;margin: 0 auto;}
+      #score {position: absolute;top: 10px;right: 10px;font-size: 24px;color: red;}
+      #high-score {position: absolute;top: 10px;left: 10px;font-size: 24px;color: blue;}
+      #key {position: absolute;bottom: 10px;left: 10px;font-size: 24px;}
+      #lives {position: absolute;bottom: 10px;right: 10px;font-size: 24px;color: #c8a2c8;}
+      #power-up {position: absolute;top: 10px;left: 50%;transform: translateX(-50%);font-size: 24px;color: yellow;}
+      .red {color: red;}
+      .blue {color: blue;}
+      .green {color: green;}
+    </style>
+  </head>
+  <body>
+    <canvas></canvas>
+    <div id="score"></div>
+    <div id="high-score"></div>
+    <div id="key">
+      <table>
+        <tbody>
+          <tr>
+            <td class="red" style="padding-right: 20px; vertical-align: middle;"><svg width="30" height="30"><polygon points="10,8 20,15 20,28 10,35 0,28 0,15" fill="red"/></svg> = 1</td>
+            <td class="blue" style="display: inline-block; padding-right: 20px; vertical-align: middle;"><svg width="30" height="30"><polygon points="10,8 20,28 0,28" fill="blue"/></svg> = 2</td>
+            <td class="green" style="display: inline-block; vertical-align: middle;"><svg width="30" height="30"><rect x="0" y="8" width="20" height="20" fill="green"/></svg> = 3</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+    <div id="lives"></div>
+    <div id="power-up"></div>
+    <script>
+        // Create canvas element
+        const canvas = document.querySelector('canvas');
+        const ctx = canvas.getContext('2d');
+        let player = null, level = 1, bullets = [], enemies = [], powerUps = [], healthItems = [], score = 0, lives = 5, highScore = JSON.parse(localStorage.getItem('highScore')) || { username: 'The Wiz', score: -99 }, bulletsPerShot = 1, powerUpInterval = 10000, powerUpCounter = 0;
+
+        const ENEMY_TYPES = [
+          { shape: 'hexagon', size: 20, speed: 1, health: .99, color: 'red', points : 1, interval: 3250 },
+          { shape: 'triangle', size: 35, speed: 1.65, health: 1.99, color: 'blue', points : 2, interval: 7500 },
+          { shape: 'square', size: 40, speed: 2.25, health: 2.99, color: 'green', points: 3, interval: 13000 }
+        ];
+
+        const POWER_UP_TYPES = [
+          { name: 'Akimbo', shape: 'yellow', effect: (player) => { bulletsPerShot = 2; } },
+          { name: '2x', shape: 'yellow', effect: (player) => { let multiplier = 2; const intervalId = setInterval(() => { multiplier = 1; clearInterval(intervalId); }, 20000); enemies.forEach(enemy => {enemy.points *= multiplier;});}}
+        ];
+
+        const LEVELS = [
+          { level: 1, enemySpeedMultiplier: 1, intervalMultiplier: 1 },
+          { level: 2, enemySpeedMultiplier: 1.2, intervalMultiplier: 0.80 },
+          { level: 3, enemySpeedMultiplier: 1.5, intervalMultiplier: 0.67 },
+          { level: 4, enemySpeedMultiplier: 1.75, intervalMultiplier: 0.5 },
+          { level: 5, enemySpeedMultiplier: 1.75, intervalMultiplier: 0.5 },
+          { level: 6, enemySpeedMultiplier: 2, intervalMultiplier: 0.2 },
+        ]
+
+        // Define game loop
+        function gameLoop() {
+          ctx.clearRect(0, 0, canvas.width, canvas.height);
+          const playerImg = new Image();
+          playerImg.src = 'vert_cerium.png'; //player image
+          ctx.drawImage(playerImg, player.x - player.width / 2, player.y - player.height / 2, player.width, player.height);
+          bullets.forEach(bullet => { //move bullets
+            bullet.y -= 10;
+            ctx.fillStyle = 'red';
+            ctx.fillRect(bullet.x - 5, bullet.y - 10, 7, 17);
+          });
+          enemies.forEach(enemy => { //move enemies
+            enemy.y += enemy.speedY;
+            enemy.x += enemy.speedX;
+            ctx.fillStyle = enemy.color;
+            if (enemy.shape === 'circle') {
+              ctx.beginPath();
+              ctx.arc(enemy.x, enemy.y, enemy.radius, 0, Math.PI * 2);
+              ctx.fill();
+            } else if (enemy.shape === 'triangle') {
+              ctx.beginPath();
+              ctx.moveTo(enemy.x, enemy.y - enemy.size / 2);
+              ctx.lineTo(enemy.x - enemy.size / 2, enemy.y + enemy.size / 2);
+              ctx.lineTo(enemy.x + enemy.size / 2, enemy.y + enemy.size / 2);
+              ctx.closePath();
+              ctx.fill();
+            } else if (enemy.shape === 'hexagon') {
+              ctx.beginPath();
+              ctx.moveTo(enemy.x + enemy.size * Math.cos(0), enemy.y + enemy.size * Math.sin(0));
+              for (let i = 1; i < 6; i++) {
+                ctx.lineTo(enemy.x + enemy.size * Math.cos(i * 2 * Math.PI / 6), enemy.y + enemy.size * Math.sin(i * 2 * Math.PI / 6));
+              }
+              ctx.closePath();
+              ctx.fill();
+            } else {
+              ctx.fillRect(enemy.x - enemy.size / 2, enemy.y - enemy.size / 2, enemy.size, enemy.size);
+            }
+          });
+
+          // Move and draw game objects | update html elements for game feedback
+          movePowerUps();
+          drawPowerUps();
+          moveHealthItems();
+          drawHealthItems();
+          checkCollisions();
+          document.querySelector('#score').textContent = `Score: ${score}`;
+          document.querySelector('#lives').textContent = `Lives: ${lives}`;
+          document.querySelector('#high-score').textContent = `High Score: ${highScore.username} (${highScore.score})`;
+          if (powerUpCounter > 0) {
+            document.querySelector('#power-up').textContent = `Power-Up: ${powerUpCounter}`;
+          } else {
+            document.querySelector('#power-up').textContent = '';
+          }
+          checkScore(score);
+          requestAnimationFrame(gameLoop);
+        }
+
+
+        // Create new enemies at regular intervals
+        ENEMY_TYPES.forEach(enemyType => {
+          setInterval(() => {
+            const enemy = {
+              x: Math.random() * canvas.width,
+              y: -enemyType.size * Math.random() / enemyType.size * 2,
+              radius: enemyType.radius,
+              size: enemyType.size,
+              speedX: enemyType.speed * (-Math.random() + 0.5),
+              speedY: enemyType.speed,
+              color: enemyType.color,
+              health: enemyType.health,
+              shape: enemyType.shape,
+              points: enemyType.points
+            };
+            enemies.push(enemy);
+          }, enemyType.interval);
+        });
+
+        function createPowerUp() {
+          const powerUpType = POWER_UP_TYPES[Math.floor(Math.random() * POWER_UP_TYPES.length)];
+          const powerUp = {
+            x: Math.random() * canvas.width,
+            y: -20,
+            size: 20,
+            type: powerUpType,
+            active: true
+          };
+          powerUps.push(powerUp);
+        }
+
+        function movePowerUps() {
+          powerUps.forEach(powerUp => {
+            powerUp.y += 5;
+            if (powerUp.y > canvas.height) {
+              powerUp.active = false;
+            }
+          });
+          powerUps = powerUps.filter(powerUp => powerUp.active);
+        }
+
+        function drawPowerUps() {
+          powerUps.forEach(powerUp => {
+            ctx.fillStyle = powerUp.type.shape;
+            ctx.font = 'bold 20px Arial';
+            ctx.fillText(powerUp.type.name, powerUp.x - powerUp.size / 2, powerUp.y + powerUp.size / 2);
+          });
+        }
+
+        function createHealthItem() {
+          const healthItem = {
+            x: Math.random() * canvas.width,
+            y: -20,
+            size: 20,
+            active: true
+          };
+          healthItems.push(healthItem);
+        }
+
+        function moveHealthItems() {
+          healthItems.forEach(healthItem => {
+            healthItem.y += 5;
+            if (healthItem.y > canvas.height) {
+              healthItem.active = false;
+            }
+          });
+          healthItems = healthItems.filter(healthItem => healthItem.active);
+        }
+
+        function drawHealthItems() {
+          healthItems.forEach(healthItem => {
+            ctx.fillStyle = 'pink';
+            ctx.font = 'bold 20px Arial';
+            ctx.fillText('Extra Life', healthItem.x - healthItem.size / 2, healthItem.y + healthItem.size / 2);
+          });
+        }
+
+        function handleKeyDown(event) {
+          if (event.key === 'ArrowLeft' && player.x - player.speed > 0) {
+            player.x -= player.speed;
+          } else if (event.key === 'ArrowRight' && player.x + player.speed < canvas.width) {
+            player.x += player.speed;
+          } else if (event.key === 'ArrowUp' && player.y - player.speed > 0) {
+            player.y -= player.speed;
+          } else if (event.key === 'ArrowDown' && player.y + player.speed < canvas.height) {
+            player.y += player.speed;
+          } else if (event.key === ' ') {
+            if (bulletsPerShot === 2) {
+              bullets.push({ x: player.x - player.width * 0.15, y: player.y });
+              bullets.push({ x: player.x + player.width * 0.15, y: player.y });
+            } else {
+              bullets.push({ x: player.x, y: player.y });
+            }
+          }
+        }
+
+        function checkScore(score) {
+          if (score > 1000 && level === 1) {
+            level = 2;
+            ENEMY_TYPES.forEach(enemyType => {
+              enemyType.speed *= LEVELS[level].enemySpeedMultiplier;
+              enemyType.interval *= LEVELS[level - 1].intervalMultiplier;
+            });
+          } else if (score > 2000 && level === 2) {
+            level = 3;
+            ENEMY_TYPES.forEach(enemyType => {
+              enemyType.speed *= LEVELS[level - 1].enemySpeedMultiplier;
+              enemyType.interval *= LEVELS[level - 1].intervalMultiplier;
+            });
+          } else if (score > 3000 && level === 3) {
+            level = 4;
+            ENEMY_TYPES.forEach(enemyType => {
+              enemyType.speed *= LEVELS[level - 1].enemySpeedMultiplier;
+              enemyType.interval *= LEVELS[level - 1].intervalMultiplier;
+            });
+          } else if (score > 4000 && level === 4) {
+            level = 5;
+            ENEMY_TYPES.forEach(enemyType => {
+              enemyType.speed *= LEVELS[level - 1].enemySpeedMultiplier;
+              enemyType.interval *= LEVELS[level - 1].intervalMultiplier;
+            });
+          } else if (score > 5000 && level === 5) {
+            level = 6;
+            ENEMY_TYPES.forEach(enemyType => {
+              enemyType.speed *= LEVELS[level - 1].enemySpeedMultiplier;
+              enemyType.interval *= LEVELS[level - 1].intervalMultiplier;
+            });
+
+          }
+        }
+
+        // Handle window resize
+        function handleResize() {
+          // Update canvas dimensions
+          canvas.width = window.innerWidth;
+          canvas.height = window.innerHeight;
+
+          // Update player position and size
+          player = {x: canvas.width / 2,y: canvas.height - 75, width: 185, height: 75, speed: 25};
+
+          // Add event listener for keydown event
+          document.addEventListener('keydown', handleKeyDown);
+        }
+
+        // Add event listeners
+        window.addEventListener('resize', handleResize);
+
+        // Start game loop
+        handleResize();
+        setInterval(createPowerUp, powerUpInterval);
+        setInterval(createHealthItem, 30000);
+        requestAnimationFrame(gameLoop);
+        
+        // Check for collisions with player
+        function checkCollisions() {
+          // Check for collisions with enemies
+          enemies.forEach(enemy => {
+            if (player.x - player.width / 2 < enemy.x + enemy.size + 1 / 2 &&
+                player.x + player.width / 2 > enemy.x - enemy.size + 1 / 2 &&
+                player.y - player.height / 2 < enemy.y + enemy.size + 1 / 2 &&
+                player.y + player.height / 2 > enemy.y - enemy.size + 1 / 2) {
+              // Remove enemy
+              enemies.splice(enemies.indexOf(enemy), 1);
+              // Decrement lives
+              lives--;
+              // Game over
+              if (lives === 0) {
+                // Check if new high score
+                if (score > highScore.score) {
+                  const username = prompt('New high score! Enter your username:');
+                  localStorage.setItem('highScore', JSON.stringify({ username, score }));
+                  highScore = { username, score };
+                }
+                // Restart game
+                lives = 5;
+                score = 0;
+                bullets = [];
+                enemies = [];
+                ENEMY_TYPES.forEach(enemyType => {
+                  setInterval(() => {
+                    const enemy = {
+                      x: Math.random() * canvas.width,
+                      y: -enemyType.size * Math.random() / enemyType.size * 2,
+                      radius: enemyType.radius,
+                      size: enemyType.size,
+                      speedX: enemyType.speed,
+                      speedY: enemyType.speed * (Math.random() * 0.5 + 0.5), // random speed between 0.5 and 1.0
+                      color: enemyType.color,
+                      health: enemyType.health,
+                      shape: enemyType.shape,
+                      points: enemyType.points,
+                      angle: Math.random() * Math.PI / 4 - Math.PI / 8 // random angle between -22.5 and 22.5 degrees
+                    };
+                    enemies.push(enemy);
+                  }, enemyType.interval);
+                });
+              }
+            }
+          });
+          // Check for collisions between bullets and enemies
+          bullets.forEach(bullet => {
+            enemies.forEach(enemy => {
+              if (bullet.x > enemy.x - enemy.size  + 2 / 2 &&
+                  bullet.x < enemy.x + enemy.size  + 2 / 2 &&
+                  bullet.y > enemy.y - enemy.size  + 2 / 2 &&
+                  bullet.y < enemy.y + enemy.size  + 2 / 2) {
+                // Remove bullet and decrement enemy health
+                bullets.splice(bullets.indexOf(bullet), 1);
+                enemy.health--;
+                // Remove enemy if health is zero or less
+                if (enemy.health <= 0) {
+                  enemies.splice(enemies.indexOf(enemy), 1);
+                  // Add score for enemy kill
+                  score += enemy.points;
+                }
+              }
+            });
+          });
+          // Check for power-up collisions with player
+          powerUps.forEach(powerUp => {
+            if (player.x - player.width / 2 < powerUp.x + powerUp.size / 2 &&
+                player.x + player.width / 2 > powerUp.x - powerUp.size / 2 &&
+                player.y - player.height / 2 < powerUp.y + powerUp.size / 2 &&
+                player.y + player.height / 2 > powerUp.y - powerUp.size / 2) {
+              powerUp.type.effect(player);
+              powerUp.active = false;
+              powerUpCounter = 10;
+              // Decrement power-up counter and remove power-up after 10 seconds
+              const intervalId = setInterval(() => {
+                powerUpCounter--;
+                if (powerUpCounter === 0) {
+                  clearInterval(intervalId);
+                  powerUps = powerUps.filter(p => p !== powerUp);
+                  bulletsPerShot = 1;
+                }
+              }, 1000);
+            }
+          });
+          powerUps = powerUps.filter(powerUp => powerUp.active);
+          // Check for health item collisions with player
+          healthItems.forEach(healthItem => {
+            if (player.x - player.width / 2 < healthItem.x + healthItem.size / 2 &&
+                player.x + player.width / 2 > healthItem.x - healthItem.size / 2 &&
+                player.y - player.height / 2 < healthItem.y + healthItem.size / 2 &&
+                player.y + player.height / 2 > healthItem.y - healthItem.size / 2) {
+              lives++;
+              healthItem.active = false;
+            }
+          });
+          healthItems = healthItems.filter(healthItem => healthItem.active);
+        }
+    </script>
+  </body>
+</html>
